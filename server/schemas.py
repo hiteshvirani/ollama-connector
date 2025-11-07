@@ -23,6 +23,10 @@ class HeartbeatPayload(BaseModel):
     """Payload sent from a node to the server on every heartbeat."""
 
     node_id: str = Field(..., description="Stable identifier for the node.")
+    cloudflare_url: Optional[str] = Field(
+        default=None,
+        description="Cloudflare tunnel URL for the node API, if available.",
+    )
     ipv4: Optional[str] = Field(
         default=None,
         description="Externally reachable IPv4 address for the node API, if available.",

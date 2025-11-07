@@ -69,8 +69,16 @@ docker compose up -d
 
 This starts the node agent container:
 - `node`: FastAPI agent exposing `POST /execute` and sending heartbeats every 30s
+- **Automatic Cloudflare Tunnel**: The container automatically creates a Cloudflare tunnel on startup and includes the tunnel URL in heartbeats
 
 **Important:** Ollama must be installed and running locally (not in Docker). The setup script handles this automatically. The node agent connects to Ollama at `http://127.0.0.1:11434`.
+
+**Cloudflare Tunnel (Automatic):**
+- The node agent automatically installs and starts `cloudflared` on container startup
+- A Cloudflare tunnel is created automatically for the node port
+- The tunnel URL is automatically included in heartbeats sent to the server
+- The server will try Cloudflare first, then IPv4, then IPv6 when connecting to nodes
+- No manual configuration needed - it works automatically when you run `docker compose up`
 
 The container is configured with `restart: unless-stopped` so it comes back automatically after reboots. Ollama service should also be configured to start on boot (handled by setup script).
 
@@ -513,9 +521,10 @@ The system supports both IPv4 and IPv6 with intelligent IP selection:
 - **Unique Local Addresses** (`fc00::...`): Private network only
 
 **IP Selection Strategy:**
-1. Server tries **IPv6 first** (if available) for better cross-network connectivity
-2. Falls back to **IPv4** if IPv6 fails or is not available
-3. Both IP versions are tried automatically for maximum compatibility
+1. Server tries **Cloudflare tunnel first** (if available) for maximum reliability across any network
+2. Falls back to **IPv4** if Cloudflare fails or is not available
+3. Falls back to **IPv6** if both Cloudflare and IPv4 fail
+4. All connection methods are tried automatically for maximum compatibility
 
 **Cross-Network Access:**
 - ✅ **Same network**: Works with both IPv4 and IPv6
@@ -542,6 +551,7 @@ The system supports both IPv4 and IPv6 with intelligent IP selection:
 | `NODE_PORT` | `8001` | Port the node agent listens on (listens on IPv6 `::` which also accepts IPv4). |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama REST endpoint. |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeats. |
+| `CLOUDFLARE_URL` | Auto-generated | Cloudflare tunnel URL (automatically set by container startup script). |
 | `REQUIRED_MODELS` | `qwen2.5:7b` | Defined in `setup.sh` - comma-separated list of models to pull. |
 | `SKIP_MODEL_PULL` | `0` | Defined in `setup.sh` - set to `"1"` to skip model pulling. |
 | `HEARTBEAT_TTL_SECONDS` | `90` | Server-side grace period before marking a node offline. |
@@ -625,14 +635,16 @@ Logs are stored in-memory (last 1000 requests) and accessible via:
 - Web UI: `http://localhost:8000/static/logs.html`
 - API: `GET /logs?limit=100`
 
-### IPv6 and Network Features
+### Cloudflare Tunnel and Network Features
 
+- **Automatic Cloudflare Tunnel**: Client automatically creates a Cloudflare tunnel on startup
+- **Smart connection priority**: Server tries Cloudflare first, then IPv4, then IPv6
 - **Dual-stack support**: Client listens on IPv6 (`::`) which also accepts IPv4
 - **Automatic IP detection**: Client detects both IPv4 and IPv6 addresses
-- **Smart IP selection**: Server tries IPv6 first, falls back to IPv4
-- **Cross-network support**: Works across different networks with global IPv6
+- **Cross-network support**: Works across any network with Cloudflare tunnel, or with global IPv6
 - **Connection-based IP**: Server uses connection IP for reliable reachability
 - **Firewall auto-configuration**: UFW rules configured for both IPv4 and IPv6
+- **No port forwarding needed**: Cloudflare tunnel bypasses firewall and NAT issues
 
 ## Troubleshooting
 

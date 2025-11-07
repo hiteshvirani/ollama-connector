@@ -26,6 +26,7 @@ HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 SERVER_URL = os.getenv("SERVER_URL", DEFAULT_SERVER_URL)
 NODE_ID = os.getenv("NODE_ID", socket.gethostname())
+CLOUDFLARE_URL = os.getenv("CLOUDFLARE_URL", None)
 
 
 def configure_logging() -> None:
@@ -126,9 +127,25 @@ async def send_heartbeat() -> None:
 
     models = await fetch_available_models(http)
     load = gather_load_info()
+    
+    # Read CLOUDFLARE_URL dynamically - try environment variable first, then file, then module-level
+    cloudflare_url = os.getenv("CLOUDFLARE_URL")
+    if not cloudflare_url:
+        # Try reading from file as backup (set by start.sh)
+        try:
+            with open("/tmp/cloudflare_url.txt", "r") as f:
+                cloudflare_url = f.read().strip()
+        except (FileNotFoundError, IOError):
+            cloudflare_url = CLOUDFLARE_URL
+    
+    if cloudflare_url:
+        LOGGER.info("Including Cloudflare URL in heartbeat: %s", cloudflare_url)
+    else:
+        LOGGER.debug("No Cloudflare URL available")
 
     payload = HeartbeatPayload(
         node_id=NODE_ID,
+        cloudflare_url=cloudflare_url,
         ipv4=detect_ipv4(),
         ipv6=detect_ipv6(),
         port=NODE_PORT,

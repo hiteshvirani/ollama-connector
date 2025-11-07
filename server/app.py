@@ -81,14 +81,14 @@ class NodeState:
     failure_count: int = 0
 
     def bump_heartbeat(self, payload: HeartbeatPayload) -> None:
-        merged = payload.model_dump()
+        merged = payload.model_dump(exclude_none=False)
         merged["last_seen"] = datetime.now(timezone.utc)
         merged["status"] = "online"
         self.record = self.record.copy(update=merged)
         self.failure_count = 0
 
     def to_dict(self) -> Dict[str, object]:
-        data = self.record.model_dump()
+        data = self.record.model_dump(exclude_none=False)
         data["active_jobs"] = self.active_jobs
         data["failure_count"] = self.failure_count
         return data
@@ -146,52 +146,40 @@ def create_app() -> FastAPI:
         async with app.state.registry_lock:
             return dict(app.state.registry)
 
-    def build_node_base(node: NodeInfo, prefer_ipv4: bool = True) -> str:
+    def build_node_url(node: NodeInfo, connection_type: str) -> str:
         """
-        Build the base URL for a node, trying multiple IP strategies.
+        Build the URL for a node based on connection type.
         
-        Strategy:
-        1. Prefer IPv4 if available (more common, better NAT support)
-        2. Fallback to IPv6 if IPv4 not available
-        3. Use the IP that the server received the connection from (most reliable)
+        Args:
+            node: NodeInfo object containing connection details
+            connection_type: One of "cloudflare", "ipv4", or "ipv6"
         
-        This handles:
-        - Same network: uses direct IP
-        - Different networks: uses public IP from connection
-        - NAT scenarios: connection IP is the reachable one
-        - IPv6-only networks: falls back to IPv6
+        Returns:
+            Full URL to the node's execute endpoint
         """
-        # Priority order:
-        # 1. IPv4 from connection (stored in node.ipv4 from request.client.host)
-        # 2. IPv6 from connection (stored in node.ipv6 from request.client.host)
-        # 3. Client's reported IPv4 (if different from connection IP)
-        # 4. Client's reported IPv6 (if different from connection IP)
-        
-        # The connection IP is the most reliable (it's the IP the server can reach)
-        # But we also store client's detected IPs for fallback
-        
-        if prefer_ipv4:
-            # Try IPv4 first
-            if node.ipv4:
-                host = node.ipv4
-            elif node.ipv6:
-                host = node.ipv6
-            else:
-                raise ValueError("Node has no reachable IP address")
+        if connection_type == "cloudflare":
+            if not node.cloudflare_url:
+                raise ValueError("Node has no Cloudflare URL")
+            # Cloudflare URL should already be a full URL, just append /execute if needed
+            base_url = node.cloudflare_url.rstrip('/')
+            if not base_url.startswith('http'):
+                base_url = f"http://{base_url}"
+            return f"{base_url}/execute"
+        elif connection_type == "ipv4":
+            if not node.ipv4:
+                raise ValueError("Node has no IPv4 address")
+            host = node.ipv4
+            return f"http://{host}:{node.port}/execute"
+        elif connection_type == "ipv6":
+            if not node.ipv6:
+                raise ValueError("Node has no IPv6 address")
+            host = node.ipv6
+            # Format IPv6 addresses properly
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            return f"http://{host}:{node.port}/execute"
         else:
-            # Try IPv6 first
-            if node.ipv6:
-                host = node.ipv6
-            elif node.ipv4:
-                host = node.ipv4
-            else:
-                raise ValueError("Node has no reachable IP address")
-        
-        # Format IPv6 addresses properly
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        
-        return f"http://{host}:{node.port}"
+            raise ValueError(f"Unknown connection type: {connection_type}")
 
     async def mark_job_start(node_id: str) -> None:
         async with app.state.registry_lock:
@@ -259,30 +247,31 @@ def create_app() -> FastAPI:
         if not node_snapshot:
             raise NodeDispatchError(node_id, "Node disappeared before dispatch", status_code=410)
 
-        # Try multiple IP strategies for cross-network compatibility
-        # Strategy 1: Try IPv6 first if available (for testing IPv6)
-        # Strategy 2: Fallback to IPv4 if IPv6 fails or not available
-        # Note: In production, you might want to prefer IPv4 first for better NAT support
-        ip_strategies = []
-        if node_snapshot.ipv6:
-            ip_strategies.append(("IPv6", False))
+        # Try connection strategies in priority order:
+        # 1. Cloudflare (most reliable for cross-network)
+        # 2. IPv4 (common, good NAT support)
+        # 3. IPv6 (fallback for IPv6-only networks)
+        connection_strategies = []
+        if node_snapshot.cloudflare_url:
+            connection_strategies.append("cloudflare")
         if node_snapshot.ipv4:
-            ip_strategies.append(("IPv4", True))
+            connection_strategies.append("ipv4")
+        if node_snapshot.ipv6:
+            connection_strategies.append("ipv6")
         
-        if not ip_strategies:
-            raise NodeDispatchError(node_id, "Node has no reachable IP address", status_code=503)
+        if not connection_strategies:
+            raise NodeDispatchError(node_id, "Node has no reachable address (no Cloudflare URL, IPv4, or IPv6)", status_code=503)
 
         last_error = None
-        for ip_type, prefer_ipv4 in ip_strategies:
+        for connection_type in connection_strategies:
             try:
-                base_url = build_node_base(node_snapshot, prefer_ipv4=prefer_ipv4)
-                target_url = f"{base_url}/execute"
-                LOGGER.info("Dispatching job %s to node %s via %s (%s)", payload.job_id, node_id, ip_type, target_url)
+                target_url = build_node_url(node_snapshot, connection_type)
+                LOGGER.info("Dispatching job %s to node %s via %s (%s)", payload.job_id, node_id, connection_type.upper(), target_url)
 
                 # Update log entry with node info
                 if log_entry:
                     log_entry.node_id = node_id
-                    log_entry.ip_version = ip_type
+                    log_entry.ip_version = connection_type.upper()
                     log_entry.node_url = target_url
 
                 await mark_job_start(node_id)
@@ -295,8 +284,8 @@ def create_app() -> FastAPI:
                     if log_entry:
                         log_entry.error = str(exc)
                         log_entry.duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-                    LOGGER.debug("Failed to connect via %s (%s): %s", ip_type, target_url, exc)
-                    # Try next IP strategy
+                    LOGGER.debug("Failed to connect via %s (%s): %s", connection_type, target_url, exc)
+                    # Try next connection strategy
                     continue
 
                 duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
@@ -313,7 +302,7 @@ def create_app() -> FastAPI:
                 if not success:
                     message = response.text or response.reason_phrase
                     last_error = Exception(f"HTTP {response.status_code}: {message}")
-                    LOGGER.debug("HTTP error via %s (%s): %s", ip_type, target_url, message)
+                    LOGGER.debug("HTTP error via %s (%s): %s", connection_type, target_url, message)
                     continue
 
                 # Success!
@@ -326,7 +315,7 @@ def create_app() -> FastAPI:
                 continue
 
         # All strategies failed
-        error_msg = str(last_error) if last_error else "All IP strategies failed"
+        error_msg = str(last_error) if last_error else "All connection strategies failed"
         raise NodeDispatchError(node_id, f"Request failed: {error_msg}", status_code=503)
 
     async def _cleanup_loop(app_: FastAPI) -> None:
@@ -391,13 +380,13 @@ def create_app() -> FastAPI:
             entry = app.state.registry.get(node_id)
             if entry:
                 entry.bump_heartbeat(payload)
-                LOGGER.debug("Updated heartbeat for node %s (IPv4: %s, IPv6: %s)", 
-                           node_id, payload.ipv4, payload.ipv6)
+                LOGGER.debug("Updated heartbeat for node %s (Cloudflare: %s, IPv4: %s, IPv6: %s)", 
+                           node_id, payload.cloudflare_url, payload.ipv4, payload.ipv6)
             else:
-                record = NodeInfo(**payload.model_dump(), last_seen=datetime.now(timezone.utc), status="online")
+                record = NodeInfo(**payload.model_dump(exclude_none=False), last_seen=datetime.now(timezone.utc), status="online")
                 app.state.registry[node_id] = NodeState(record=record)
-                LOGGER.info("Registered new node %s (IPv4: %s, IPv6: %s, connection: %s)", 
-                          node_id, payload.ipv4, payload.ipv6, connection_ip)
+                LOGGER.info("Registered new node %s (Cloudflare: %s, IPv4: %s, IPv6: %s, connection: %s)", 
+                          node_id, payload.cloudflare_url, payload.ipv4, payload.ipv6, connection_ip)
 
         return {"node_id": node_id, "status": "ok"}
 
