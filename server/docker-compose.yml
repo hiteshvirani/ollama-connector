@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  hub:
+    build: .
+    image: ollama-hub:latest
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+      - LOG_LEVEL=INFO
+      - HEARTBEAT_TTL_SECONDS=90
+      - HEARTBEAT_OFFLINE_SECONDS=180
+      - NODE_MAX_FAILURES=3
+    ports:
+      - "8000:8000"
+

@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Hub - Node Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+            gap: 20px;
+        }
+
+        .node-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .node-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .node-id {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-degraded {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .node-info {
+            margin-bottom: 12px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .info-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .info-value {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .ip-address {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            background: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .models-section {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .models-label {
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .models-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .model-tag {
+            background: #667eea;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .load-info {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .load-item {
+            flex: 1;
+        }
+
+        .load-label {
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .load-bar {
+            height: 8px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .load-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.3s;
+        }
+
+        .load-fill.high {
+            background: linear-gradient(90deg, #f093fb, #f5576c);
+        }
+
+        .load-fill.medium {
+            background: linear-gradient(90deg, #ffecd2, #fcb69f);
+        }
+
+        .no-nodes {
+            background: white;
+            border-radius: 12px;
+            padding: 60px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .no-nodes-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+        }
+
+        .no-nodes-text {
+            color: #666;
+            font-size: 18px;
+        }
+
+        .refresh-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-size: 12px;
+            color: #666;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .last-seen {
+            font-size: 12px;
+            color: #999;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Ollama Hub Dashboard</h1>
+            <p class="subtitle">Monitor all registered Ollama nodes in real-time</p>
+        </header>
+
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="total-nodes">0</div>
+                <div class="stat-label">Total Nodes</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="online-nodes">0</div>
+                <div class="stat-label">Online</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="total-models">0</div>
+                <div class="stat-label">Total Models</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="active-jobs">0</div>
+                <div class="stat-label">Active Jobs</div>
+            </div>
+        </div>
+
+        <div class="nodes-grid" id="nodes-grid">
+            <div class="no-nodes">
+                <div class="no-nodes-icon">⏳</div>
+                <div class="no-nodes-text">Loading nodes...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="refresh-indicator" id="refresh-indicator">
+        <span class="spinner"></span>
+        <span>Refreshing...</span>
+    </div>
+
+    <script>
+        let refreshInterval;
+
+        function formatTimeAgo(timestamp) {
+            if (!timestamp) return 'Never';
+            const now = new Date();
+            const then = new Date(timestamp);
+            const diff = Math.floor((now - then) / 1000);
+            
+            if (diff < 60) return `${diff}s ago`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            return `${Math.floor(diff / 86400)}d ago`;
+        }
+
+        function getLoadClass(value) {
+            if (!value) return '';
+            if (value >= 0.7) return 'high';
+            if (value >= 0.4) return 'medium';
+            return '';
+        }
+
+        function formatPercentage(value) {
+            if (value === null || value === undefined) return 'N/A';
+            return `${Math.round(value * 100)}%`;
+        }
+
+        function updateStats(nodes) {
+            const total = nodes.length;
+            const online = nodes.filter(n => n.status === 'online').length;
+            const totalModels = new Set(nodes.flatMap(n => n.models || [])).size;
+            const activeJobs = nodes.reduce((sum, n) => sum + (n.active_jobs || 0), 0);
+
+            document.getElementById('total-nodes').textContent = total;
+            document.getElementById('online-nodes').textContent = online;
+            document.getElementById('total-models').textContent = totalModels;
+            document.getElementById('active-jobs').textContent = activeJobs;
+        }
+
+        function renderNodes(nodes) {
+            const grid = document.getElementById('nodes-grid');
+            
+            if (nodes.length === 0) {
+                grid.innerHTML = `
+                    <div class="no-nodes">
+                        <div class="no-nodes-icon">🔍</div>
+                        <div class="no-nodes-text">No nodes registered yet</div>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = nodes.map(node => {
+                const statusClass = `status-${node.status || 'offline'}`;
+                const ipv4 = node.ipv4 || 'N/A';
+                const ipv6 = node.ipv6 || 'N/A';
+                const port = node.port || 8001;
+                const models = node.models || [];
+                const load = node.load || {};
+                const cpu = load.cpu || 0;
+                const memory = load.memory || 0;
+                const activeJobs = node.active_jobs || 0;
+                const failureCount = node.failure_count || 0;
+                const lastSeen = node.last_seen || null;
+
+                return `
+                    <div class="node-card">
+                        <div class="node-header">
+                            <div class="node-id">${escapeHtml(node.node_id)}</div>
+                            <div class="status-badge ${statusClass}">${node.status || 'offline'}</div>
+                        </div>
+                        
+                        <div class="node-info">
+                            <div class="info-row">
+                                <span class="info-label">IPv4:</span>
+                                <span class="info-value ip-address">${escapeHtml(ipv4)}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">IPv6:</span>
+                                <span class="info-value ip-address">${escapeHtml(ipv6)}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Port:</span>
+                                <span class="info-value">${port}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Active Jobs:</span>
+                                <span class="info-value">${activeJobs}</span>
+                            </div>
+                            ${failureCount > 0 ? `
+                            <div class="info-row">
+                                <span class="info-label">Failures:</span>
+                                <span class="info-value" style="color: #dc3545;">${failureCount}</span>
+                            </div>
+                            ` : ''}
+                        </div>
+
+                        ${cpu !== null || memory !== null ? `
+                        <div class="load-info">
+                            ${cpu !== null ? `
+                            <div class="load-item">
+                                <div class="load-label">CPU</div>
+                                <div class="load-bar">
+                                    <div class="load-fill ${getLoadClass(cpu)}" style="width: ${cpu * 100}%"></div>
+                                </div>
+                                <div style="font-size: 11px; color: #666; margin-top: 2px;">${formatPercentage(cpu)}</div>
+                            </div>
+                            ` : ''}
+                            ${memory !== null ? `
+                            <div class="load-item">
+                                <div class="load-label">Memory</div>
+                                <div class="load-bar">
+                                    <div class="load-fill ${getLoadClass(memory)}" style="width: ${memory * 100}%"></div>
+                                </div>
+                                <div style="font-size: 11px; color: #666; margin-top: 2px;">${formatPercentage(memory)}</div>
+                            </div>
+                            ` : ''}
+                        </div>
+                        ` : ''}
+
+                        ${models.length > 0 ? `
+                        <div class="models-section">
+                            <div class="models-label">Available Models (${models.length})</div>
+                            <div class="models-list">
+                                ${models.map(model => `<span class="model-tag">${escapeHtml(model)}</span>`).join('')}
+                            </div>
+                        </div>
+                        ` : `
+                        <div class="models-section">
+                            <div class="models-label" style="color: #999;">No models available</div>
+                        </div>
+                        `}
+
+                        ${lastSeen ? `
+                        <div class="last-seen">Last seen: ${formatTimeAgo(lastSeen)}</div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function fetchNodes() {
+            try {
+                document.getElementById('refresh-indicator').style.display = 'block';
+                const response = await fetch('/nodes');
+                if (!response.ok) throw new Error('Failed to fetch nodes');
+                const nodes = await response.json();
+                
+                updateStats(nodes);
+                renderNodes(nodes);
+            } catch (error) {
+                console.error('Error fetching nodes:', error);
+                document.getElementById('nodes-grid').innerHTML = `
+                    <div class="no-nodes">
+                        <div class="no-nodes-icon">❌</div>
+                        <div class="no-nodes-text">Error loading nodes: ${escapeHtml(error.message)}</div>
+                    </div>
+                `;
+            } finally {
+                document.getElementById('refresh-indicator').style.display = 'none';
+            }
+        }
+
+        // Initial load
+        fetchNodes();
+
+        // Auto-refresh every 5 seconds
+        refreshInterval = setInterval(fetchNodes, 5000);
+
+        // Also refresh on window focus
+        window.addEventListener('focus', fetchNodes);
+    </script>
+</body>
+</html>
+

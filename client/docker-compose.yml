@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  node:
+    build: .
+    image: ollama-node:latest
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    environment:
+      SERVER_URL: ${SERVER_URL:-http://host.docker.internal:8000}
+      OLLAMA_BASE_URL: http://ollama:11434
+      NODE_ID: ${NODE_ID:-ollama-node-1}
+      NODE_PORT: 8001
+    ports:
+      - "8001:8001"
+
+volumes:
+  ollama-data:
+
