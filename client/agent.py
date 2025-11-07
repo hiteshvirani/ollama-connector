@@ -82,20 +82,43 @@ def gather_load_info() -> LoadInfo:
 
 async def fetch_available_models(http: httpx.AsyncClient) -> list[str]:
     url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags"
-    try:
-        response = await http.get(url)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to fetch models from Ollama: %s", exc)
-        return []
-
-    models = []
-    for item in data.get("models", []):
-        name = item.get("name")
-        if name:
-            models.append(name)
-    return models
+    max_retries = 3
+    retry_delay = 2.0
+    
+    for attempt in range(max_retries):
+        try:
+            response = await http.get(url, timeout=5.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            models = []
+            for item in data.get("models", []):
+                name = item.get("name")
+                if name:
+                    models.append(name)
+            
+            if models:
+                LOGGER.debug("Found %d models: %s", len(models), ", ".join(models))
+            else:
+                LOGGER.warning("Ollama returned no models. Make sure models are pulled.")
+            
+            return models
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                LOGGER.debug("Ollama API timeout, retrying in %.1fs...", retry_delay)
+                await asyncio.sleep(retry_delay)
+                continue
+            LOGGER.warning("Failed to fetch models from Ollama: timeout after %d attempts", max_retries)
+            return []
+        except Exception as exc:  # noqa: BLE001
+            if attempt < max_retries - 1:
+                LOGGER.debug("Failed to fetch models (attempt %d/%d): %s, retrying...", attempt + 1, max_retries, exc)
+                await asyncio.sleep(retry_delay)
+                continue
+            LOGGER.warning("Failed to fetch models from Ollama after %d attempts: %s", max_retries, exc)
+            return []
+    
+    return []
 
 
 async def send_heartbeat() -> None:

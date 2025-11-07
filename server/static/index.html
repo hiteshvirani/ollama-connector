@@ -129,6 +129,11 @@
             color: #856404;
         }
 
+        .status-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
         .node-info {
             margin-bottom: 12px;
         }
@@ -276,6 +281,67 @@
             color: #999;
             margin-top: 8px;
         }
+
+        .last-ping-section {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .last-ping-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .last-ping-label {
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .last-ping-time {
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .last-ping-time.recent {
+            color: #28a745;
+        }
+
+        .last-ping-time.warning {
+            color: #ffc107;
+        }
+
+        .last-ping-time.offline {
+            color: #dc3545;
+        }
+
+        .ping-status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .ping-status-indicator.online {
+            background: #28a745;
+            box-shadow: 0 0 4px rgba(40, 167, 69, 0.5);
+        }
+
+        .ping-status-indicator.warning {
+            background: #ffc107;
+            box-shadow: 0 0 4px rgba(255, 193, 7, 0.5);
+        }
+
+        .ping-status-indicator.offline {
+            background: #dc3545;
+            box-shadow: 0 0 4px rgba(220, 53, 69, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -332,6 +398,27 @@
             return `${Math.floor(diff / 86400)}d ago`;
         }
 
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'Never';
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+
+        function getPingStatus(timestamp) {
+            if (!timestamp) return { status: 'offline', class: 'offline', seconds: Infinity };
+            const now = new Date();
+            const then = new Date(timestamp);
+            const diff = Math.floor((now - then) / 1000);
+            
+            if (diff <= 60) {
+                return { status: 'online', class: 'recent', seconds: diff };
+            } else if (diff <= 90) {
+                return { status: 'warning', class: 'warning', seconds: diff };
+            } else {
+                return { status: 'offline', class: 'offline', seconds: diff };
+            }
+        }
+
         function getLoadClass(value) {
             if (!value) return '';
             if (value >= 0.7) return 'high';
@@ -346,7 +433,13 @@
 
         function updateStats(nodes) {
             const total = nodes.length;
-            const online = nodes.filter(n => n.status === 'online').length;
+            // Count nodes that have pinged within last 60 seconds as online
+            const now = new Date();
+            const online = nodes.filter(n => {
+                if (!n.last_seen) return false;
+                const diff = Math.floor((now - new Date(n.last_seen)) / 1000);
+                return diff <= 60;
+            }).length;
             const totalModels = new Set(nodes.flatMap(n => n.models || [])).size;
             const activeJobs = nodes.reduce((sum, n) => sum + (n.active_jobs || 0), 0);
 
@@ -370,7 +463,20 @@
             }
 
             grid.innerHTML = nodes.map(node => {
-                const statusClass = `status-${node.status || 'offline'}`;
+                const lastSeen = node.last_seen || null;
+                const pingStatus = getPingStatus(lastSeen);
+                
+                // Determine status based on last ping time (60s threshold)
+                let displayStatus = node.status || 'offline';
+                if (pingStatus.status === 'offline') {
+                    displayStatus = 'offline';
+                } else if (pingStatus.status === 'warning') {
+                    displayStatus = 'warning';
+                } else if (displayStatus === 'offline' && pingStatus.status === 'online') {
+                    displayStatus = 'online';
+                }
+                
+                const statusClass = `status-${displayStatus}`;
                 const ipv4 = node.ipv4 || 'N/A';
                 const ipv6 = node.ipv6 || 'N/A';
                 const port = node.port || 8001;
@@ -380,13 +486,12 @@
                 const memory = load.memory || 0;
                 const activeJobs = node.active_jobs || 0;
                 const failureCount = node.failure_count || 0;
-                const lastSeen = node.last_seen || null;
 
                 return `
                     <div class="node-card">
                         <div class="node-header">
                             <div class="node-id">${escapeHtml(node.node_id)}</div>
-                            <div class="status-badge ${statusClass}">${node.status || 'offline'}</div>
+                            <div class="status-badge ${statusClass}">${displayStatus}</div>
                         </div>
                         
                         <div class="node-info">
@@ -450,9 +555,32 @@
                         </div>
                         `}
 
-                        ${lastSeen ? `
-                        <div class="last-seen">Last seen: ${formatTimeAgo(lastSeen)}</div>
-                        ` : ''}
+                        <div class="last-ping-section">
+                            <div class="last-ping-row">
+                                <span class="last-ping-label">Last Ping</span>
+                                <span class="last-ping-time ${pingStatus.class}">
+                                    <span class="ping-status-indicator ${pingStatus.status}"></span>
+                                    ${lastSeen ? formatTimeAgo(lastSeen) : 'Never'}
+                                </span>
+                            </div>
+                            ${lastSeen ? `
+                            <div class="last-ping-row" style="margin-top: 4px;">
+                                <span class="last-ping-label" style="font-size: 10px;">Timestamp</span>
+                                <span style="font-size: 11px; color: #999; font-family: 'Courier New', monospace;">
+                                    ${formatTimestamp(lastSeen)}
+                                </span>
+                            </div>
+                            ${pingStatus.seconds > 60 ? `
+                            <div style="margin-top: 6px; padding: 6px; background: ${pingStatus.status === 'offline' ? '#fee' : '#fff3cd'}; border-radius: 4px; font-size: 11px; color: ${pingStatus.status === 'offline' ? '#721c24' : '#856404'};">
+                                ⚠️ ${pingStatus.seconds > 90 ? 'Node appears offline' : 'No ping received in last 60 seconds'}
+                            </div>
+                            ` : ''}
+                            ` : `
+                            <div style="margin-top: 6px; padding: 6px; background: #fee; border-radius: 4px; font-size: 11px; color: #721c24;">
+                                ⚠️ Node has never pinged
+                            </div>
+                            `}
+                        </div>
                     </div>
                 `;
             }).join('');

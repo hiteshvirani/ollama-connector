@@ -4,7 +4,7 @@ set -euo pipefail
 # ============================================
 # Configuration - Edit these values as needed
 # ============================================
-REQUIRED_MODELS="llama3,mistral"  # Comma-separated list of models to pull
+REQUIRED_MODELS="qwen2.5:7b"       # Comma-separated list of models to pull
 NODE_PORT="8001"                   # Port for the node agent
 OLLAMA_PORT="11434"                # Port for Ollama API
 SKIP_MODEL_PULL="0"                # Set to "1" to skip model pulling
@@ -78,16 +78,65 @@ docker_compose_cmd() {
     fi
 }
 
-# Check and pull Ollama Docker image
-check_ollama_docker() {
-    log_info "Checking Ollama Docker image..."
+# Check and install Ollama locally
+check_ollama_installation() {
+    log_info "Checking Ollama installation..."
     
-    if docker images ollama/ollama:latest --format "{{.Repository}}:{{.Tag}}" | grep -q "ollama/ollama:latest"; then
-        log_success "Ollama Docker image is already available"
+    if command_exists ollama; then
+        log_success "Ollama is already installed"
+        ollama_version=$(ollama --version 2>/dev/null || echo "unknown")
+        log_info "Ollama version: $ollama_version"
+        return 0
+    fi
+    
+    log_info "Ollama is not installed. Installing Ollama..."
+    
+    # Install Ollama using official install script
+    if command_exists curl; then
+        log_info "Downloading and installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh
+        if [ $? -eq 0 ]; then
+            log_success "Ollama installed successfully"
+        else
+            log_error "Failed to install Ollama"
+            exit 1
+        fi
     else
-        log_info "Pulling Ollama Docker image (this may take a while)..."
-        docker pull ollama/ollama:latest
-        log_success "Ollama Docker image pulled successfully"
+        log_error "curl is required to install Ollama but not found!"
+        log_info "Install curl: sudo apt-get install curl"
+        log_info "Or install Ollama manually: https://ollama.com/download"
+        exit 1
+    fi
+}
+
+# Start Ollama service (systemd)
+start_ollama_service() {
+    log_info "Starting Ollama service..."
+    
+    # Check if Ollama service is already running
+    if systemctl is-active --quiet ollama 2>/dev/null; then
+        log_info "Ollama service is already running"
+        return 0
+    fi
+    
+    # Try to start Ollama service
+    if systemctl start ollama 2>/dev/null; then
+        log_success "Ollama service started"
+    else
+        log_warning "Could not start Ollama via systemd, trying to run in background..."
+        # If systemd doesn't work, try running ollama serve in background
+        if ! pgrep -f "ollama serve" >/dev/null; then
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+            sleep 2
+            if pgrep -f "ollama serve" >/dev/null; then
+                log_success "Ollama started in background"
+            else
+                log_error "Failed to start Ollama"
+                exit 1
+            fi
+        else
+            log_info "Ollama is already running"
+        fi
     fi
 }
 
@@ -139,22 +188,6 @@ configure_ufw() {
     log_success "Firewall configuration complete"
 }
 
-# Start Ollama service
-start_ollama_service() {
-    log_info "Starting Ollama service..."
-    
-    # Check if Ollama container is already running
-    if docker ps --format "{{.Names}}" | grep -q "ollama"; then
-        log_info "Ollama container is already running"
-        return 0
-    fi
-    
-    # Start only the Ollama service
-    log_info "Starting Ollama container..."
-    docker_compose_cmd up -d ollama
-    
-    log_success "Ollama service started"
-}
 
 # Wait for Ollama to be ready
 wait_for_ollama() {
@@ -184,7 +217,8 @@ wait_for_ollama() {
     done
     
     log_error "Ollama API did not become ready after $((max_attempts * 2)) seconds"
-    log_info "Check Ollama logs: docker logs ollama"
+    log_info "Check Ollama service: sudo systemctl status ollama"
+    log_info "Or check if Ollama is running: pgrep -f 'ollama serve'"
     exit 1
 }
 
@@ -286,11 +320,13 @@ verify_setup() {
     log_info "Verifying setup..."
     
     # Check Ollama is running
-    if ! docker ps --format "{{.Names}}" | grep -q "ollama"; then
-        log_error "Ollama container is not running!"
+    if ! pgrep -f "ollama serve" >/dev/null && ! systemctl is-active --quiet ollama 2>/dev/null; then
+        log_error "Ollama service is not running!"
+        log_info "Try: sudo systemctl start ollama"
+        log_info "Or run: ollama serve"
         return 1
     fi
-    log_success "Ollama container is running"
+    log_success "Ollama service is running"
     
     # Check Ollama API is accessible
     if ! command_exists curl; then
@@ -344,7 +380,7 @@ main() {
     echo ""
     
     check_docker
-    check_ollama_docker
+    check_ollama_installation
     configure_ufw
     start_ollama_service
     wait_for_ollama
@@ -366,8 +402,12 @@ main() {
     echo "  3. Start the node agent:"
     echo "     docker compose up -d"
     echo ""
-    log_info "To view logs: docker compose logs -f"
+    echo "  4. Verify Ollama is running:"
+    echo "     ollama list"
+    echo ""
+    log_info "To view logs: docker compose logs -f node"
     log_info "To stop: docker compose down"
+    log_info "Note: Ollama runs locally (not in Docker) and must be running for the node to work"
 }
 
 # Run main function
