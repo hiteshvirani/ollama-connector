@@ -6,10 +6,11 @@ import asyncio
 import contextlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
+from collections import deque
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -36,6 +37,39 @@ def configure_logging() -> None:
 
 
 configure_logging()
+
+
+@dataclass
+class RequestLog:
+    """Log entry for API requests."""
+    timestamp: datetime
+    request_ip: str
+    endpoint: str
+    method: str
+    request_json: Optional[Dict[str, Any]] = None
+    node_id: Optional[str] = None
+    ip_version: Optional[str] = None  # "IPv4" or "IPv6"
+    node_url: Optional[str] = None
+    status_code: Optional[int] = None
+    success: bool = False
+    error: Optional[str] = None
+    duration_ms: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "request_ip": self.request_ip,
+            "endpoint": self.endpoint,
+            "method": self.method,
+            "request_json": self.request_json,
+            "node_id": self.node_id,
+            "ip_version": self.ip_version,
+            "node_url": self.node_url,
+            "status_code": self.status_code,
+            "success": self.success,
+            "error": self.error,
+            "duration_ms": self.duration_ms,
+        }
 
 
 @dataclass
@@ -76,6 +110,9 @@ def create_app() -> FastAPI:
     app.state.registry_lock = asyncio.Lock()
     app.state.http: Optional[httpx.AsyncClient] = None
     app.state.cleanup_task: Optional[asyncio.Task] = None
+    # Request logs: keep last 1000 entries (FIFO)
+    app.state.request_logs: deque = deque(maxlen=1000)
+    app.state.logs_lock = asyncio.Lock()
 
     # Mount static files for dashboard
     static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -109,18 +146,51 @@ def create_app() -> FastAPI:
         async with app.state.registry_lock:
             return dict(app.state.registry)
 
-    def build_node_base(node: NodeInfo) -> str:
-        # Use the IP from the heartbeat (which is the reachable address from request.client.host)
-        # This works for any network configuration:
-        # - If client is on host network: request.client.host is Docker gateway (172.x.x.1)
-        # - If client is in Docker network: request.client.host is the container IP
-        # - If client is remote: request.client.host is the client's public IP
-        host = node.ipv4 or node.ipv6
-        if not host:
-            raise ValueError("Node has no reachable IP address")
+    def build_node_base(node: NodeInfo, prefer_ipv4: bool = True) -> str:
+        """
+        Build the base URL for a node, trying multiple IP strategies.
         
+        Strategy:
+        1. Prefer IPv4 if available (more common, better NAT support)
+        2. Fallback to IPv6 if IPv4 not available
+        3. Use the IP that the server received the connection from (most reliable)
+        
+        This handles:
+        - Same network: uses direct IP
+        - Different networks: uses public IP from connection
+        - NAT scenarios: connection IP is the reachable one
+        - IPv6-only networks: falls back to IPv6
+        """
+        # Priority order:
+        # 1. IPv4 from connection (stored in node.ipv4 from request.client.host)
+        # 2. IPv6 from connection (stored in node.ipv6 from request.client.host)
+        # 3. Client's reported IPv4 (if different from connection IP)
+        # 4. Client's reported IPv6 (if different from connection IP)
+        
+        # The connection IP is the most reliable (it's the IP the server can reach)
+        # But we also store client's detected IPs for fallback
+        
+        if prefer_ipv4:
+            # Try IPv4 first
+            if node.ipv4:
+                host = node.ipv4
+            elif node.ipv6:
+                host = node.ipv6
+            else:
+                raise ValueError("Node has no reachable IP address")
+        else:
+            # Try IPv6 first
+            if node.ipv6:
+                host = node.ipv6
+            elif node.ipv4:
+                host = node.ipv4
+            else:
+                raise ValueError("Node has no reachable IP address")
+        
+        # Format IPv6 addresses properly
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
+        
         return f"http://{host}:{node.port}"
 
     async def mark_job_start(node_id: str) -> None:
@@ -180,7 +250,7 @@ def create_app() -> FastAPI:
                 return None
             return entry.record.copy(deep=True)
 
-    async def dispatch_to_node(node_id: str, payload: JobDispatchPayload) -> Response:
+    async def dispatch_to_node(node_id: str, payload: JobDispatchPayload, log_entry: Optional[RequestLog] = None) -> Response:
         http = app.state.http
         if http is None:  # pragma: no cover - startup invariant
             raise RuntimeError("HTTP client not initialised")
@@ -189,26 +259,74 @@ def create_app() -> FastAPI:
         if not node_snapshot:
             raise NodeDispatchError(node_id, "Node disappeared before dispatch", status_code=410)
 
-        base_url = build_node_base(node_snapshot)
-        target_url = f"{base_url}/execute"
-        LOGGER.info("Dispatching job %s to node %s (%s)", payload.job_id, node_id, target_url)
+        # Try multiple IP strategies for cross-network compatibility
+        # Strategy 1: Try IPv4 first (most common, better NAT support)
+        # Strategy 2: If IPv4 fails and IPv6 available, try IPv6
+        ip_strategies = []
+        if node_snapshot.ipv4:
+            ip_strategies.append(("IPv4", True))
+        if node_snapshot.ipv6:
+            ip_strategies.append(("IPv6", False))
+        
+        if not ip_strategies:
+            raise NodeDispatchError(node_id, "Node has no reachable IP address", status_code=503)
 
-        await mark_job_start(node_id)
-        try:
-            response = await http.post(target_url, json=payload.model_dump())
-        except Exception as exc:  # noqa: BLE001
-            await mark_job_end(node_id, success=False)
-            raise NodeDispatchError(node_id, f"Request failed: {exc}", status_code=503) from exc
+        last_error = None
+        for ip_type, prefer_ipv4 in ip_strategies:
+            try:
+                base_url = build_node_base(node_snapshot, prefer_ipv4=prefer_ipv4)
+                target_url = f"{base_url}/execute"
+                LOGGER.info("Dispatching job %s to node %s via %s (%s)", payload.job_id, node_id, ip_type, target_url)
 
-        success = 200 <= response.status_code < 300
-        await mark_job_end(node_id, success=success)
+                # Update log entry with node info
+                if log_entry:
+                    log_entry.node_id = node_id
+                    log_entry.ip_version = ip_type
+                    log_entry.node_url = target_url
 
-        if not success:
-            message = response.text or response.reason_phrase
-            raise NodeDispatchError(node_id, message, status_code=response.status_code)
+                await mark_job_start(node_id)
+                start_time = datetime.now(timezone.utc)
+                try:
+                    response = await http.post(target_url, json=payload.model_dump())
+                except Exception as exc:  # noqa: BLE001
+                    await mark_job_end(node_id, success=False)
+                    last_error = exc
+                    if log_entry:
+                        log_entry.error = str(exc)
+                        log_entry.duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                    LOGGER.debug("Failed to connect via %s (%s): %s", ip_type, target_url, exc)
+                    # Try next IP strategy
+                    continue
 
-        media_type = response.headers.get("content-type", "application/json")
-        return Response(content=response.content, media_type=media_type, status_code=response.status_code)
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                success = 200 <= response.status_code < 300
+                await mark_job_end(node_id, success=success)
+
+                if log_entry:
+                    log_entry.status_code = response.status_code
+                    log_entry.success = success
+                    log_entry.duration_ms = duration_ms
+                    if not success:
+                        log_entry.error = response.text or response.reason_phrase
+
+                if not success:
+                    message = response.text or response.reason_phrase
+                    last_error = Exception(f"HTTP {response.status_code}: {message}")
+                    LOGGER.debug("HTTP error via %s (%s): %s", ip_type, target_url, message)
+                    continue
+
+                # Success!
+                media_type = response.headers.get("content-type", "application/json")
+                return Response(content=response.content, media_type=media_type, status_code=response.status_code)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if log_entry:
+                    log_entry.error = str(exc)
+                continue
+
+        # All strategies failed
+        error_msg = str(last_error) if last_error else "All IP strategies failed"
+        raise NodeDispatchError(node_id, f"Request failed: {error_msg}", status_code=503)
 
     async def _cleanup_loop(app_: FastAPI) -> None:
         try:
@@ -232,24 +350,39 @@ def create_app() -> FastAPI:
 
     @app.post("/nodes/heartbeat")
     async def register_node(payload: HeartbeatPayload, request: Request) -> Dict[str, object]:
-        # Get the reachable address from the request
-        # When both server and client use host network, this is the actual client IP
-        # When client is remote, this is the client's public IP
-        remote_host = request.client.host if request.client else None
+        """
+        Register or update a node's heartbeat.
+        
+        Network handling strategy:
+        - The connection IP (request.client.host) is the IP the server can reach
+        - This is stored as the primary IP (overwrites client's detected IP)
+        - Client's detected IPs are kept for reference but connection IP takes priority
+        - This handles NAT, different networks, and cross-network scenarios
+        """
+        # Get the reachable address from the connection (most reliable)
+        # This is the IP the server can actually connect back to
+        connection_ip = request.client.host if request.client else None
 
         payload_data = payload.model_dump()
         node_id = payload.node_id
 
-        # Use the request's remote address as the reachable IP
+        # Store the connection IP as the primary reachable address
         # This works for any network configuration:
-        # - Both on host network: remote_host is client's actual IP
-        # - Client remote: remote_host is client's public IP
-        # - Client in Docker, server on host: remote_host is Docker gateway (but server can reach it)
-        if remote_host:
-            if ":" not in remote_host:
-                payload_data["ipv4"] = remote_host
+        # - Same network: connection IP is the direct IP
+        # - Different networks: connection IP is the public/NAT IP
+        # - NAT scenarios: connection IP is the externally reachable IP
+        # - IPv6: connection IP is the IPv6 address
+        if connection_ip:
+            if ":" not in connection_ip:
+                # IPv4 connection - use as primary IPv4
+                payload_data["ipv4"] = connection_ip
+                LOGGER.debug("Node %s connection IPv4: %s (client reported: %s)", 
+                           node_id, connection_ip, payload_data.get("ipv4"))
             else:
-                payload_data["ipv6"] = remote_host
+                # IPv6 connection - use as primary IPv6
+                payload_data["ipv6"] = connection_ip
+                LOGGER.debug("Node %s connection IPv6: %s (client reported: %s)", 
+                           node_id, connection_ip, payload_data.get("ipv6"))
 
         payload = HeartbeatPayload(**payload_data)
 
@@ -257,11 +390,13 @@ def create_app() -> FastAPI:
             entry = app.state.registry.get(node_id)
             if entry:
                 entry.bump_heartbeat(payload)
-                LOGGER.debug("Updated heartbeat for node %s from %s", node_id, remote_host)
+                LOGGER.debug("Updated heartbeat for node %s (IPv4: %s, IPv6: %s)", 
+                           node_id, payload.ipv4, payload.ipv6)
             else:
                 record = NodeInfo(**payload.model_dump(), last_seen=datetime.now(timezone.utc), status="online")
                 app.state.registry[node_id] = NodeState(record=record)
-                LOGGER.info("Registered new node %s from %s", node_id, remote_host)
+                LOGGER.info("Registered new node %s (IPv4: %s, IPv6: %s, connection: %s)", 
+                          node_id, payload.ipv4, payload.ipv6, connection_ip)
 
         return {"node_id": node_id, "status": "ok"}
 
@@ -279,9 +414,23 @@ def create_app() -> FastAPI:
             return entry.to_dict()
 
     @app.post("/jobs")
-    async def create_job(request_payload: JobRequest) -> Response:
+    async def create_job(request_payload: JobRequest, request: Request) -> Response:
+        # Create log entry for this request
+        request_ip = request.client.host if request.client else "unknown"
+        log_entry = RequestLog(
+            timestamp=datetime.now(timezone.utc),
+            request_ip=request_ip,
+            endpoint="/jobs",
+            method="POST",
+            request_json=request_payload.model_dump(),
+        )
+
         candidate_ids = await choose_node_ids(request_payload.model)
         if not candidate_ids:
+            log_entry.error = "No healthy nodes available for requested model"
+            log_entry.status_code = 503
+            async with app.state.logs_lock:
+                app.state.request_logs.append(log_entry)
             raise HTTPException(status_code=503, detail="No healthy nodes available for requested model")
 
         job_id = str(uuid4())
@@ -296,18 +445,39 @@ def create_app() -> FastAPI:
         errors = []
         for node_id in candidate_ids:
             try:
-                return await dispatch_to_node(node_id, dispatch_payload)
+                response = await dispatch_to_node(node_id, dispatch_payload, log_entry=log_entry)
+                # Log successful request
+                async with app.state.logs_lock:
+                    app.state.request_logs.append(log_entry)
+                return response
             except NodeDispatchError as exc:
                 LOGGER.warning("Node %s failed job %s: %s", exc.node_id, job_id, exc)
                 errors.append({"node_id": exc.node_id, "message": str(exc), "status": exc.status_code})
+                # Update log entry with error but continue to next node
+                if not log_entry.error:
+                    log_entry.error = f"Node {exc.node_id}: {exc}"
                 continue
 
+        # All nodes failed
+        log_entry.error = f"All candidate nodes failed: {errors}"
+        log_entry.status_code = 503
+        async with app.state.logs_lock:
+            app.state.request_logs.append(log_entry)
+        
         detail = {
             "message": "All candidate nodes failed to execute the job",
             "errors": errors,
             "job_id": job_id,
         }
         raise HTTPException(status_code=503, detail=detail)
+
+    @app.get("/logs")
+    async def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
+        """Get request logs for debugging and monitoring."""
+        async with app.state.logs_lock:
+            # Return most recent logs (deque is already in order)
+            logs = list(app.state.request_logs)[-limit:]
+            return [log.to_dict() for log in reversed(logs)]  # Most recent first
 
     @app.get("/healthz")
     async def healthcheck() -> Dict[str, str]:  # pragma: no cover - trivial endpoint

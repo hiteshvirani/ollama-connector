@@ -67,6 +67,47 @@
             margin: 0 auto;
         }
 
+        /* Navigation */
+        .nav-bar {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 16px 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+
+        .nav-link:hover {
+            background: var(--bg-tertiary);
+            color: var(--accent-primary);
+        }
+
+        .nav-link.active {
+            background: var(--gradient-accent);
+            color: white;
+        }
+
         /* Header */
         header {
             background: var(--bg-secondary);
@@ -599,20 +640,32 @@
                 flex-direction: column;
                 align-items: flex-start;
             }
+            .nav-bar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <div class="header-left">
-                <h1>🤖 Ollama Hub Dashboard</h1>
-                <p class="subtitle">Monitor all registered Ollama nodes in real-time</p>
+        <!-- Navigation Bar -->
+        <nav class="nav-bar">
+            <div class="nav-links">
+                <a href="/" class="nav-link active">📊 Dashboard</a>
+                <a href="/static/logs.html" class="nav-link">📋 Logs</a>
             </div>
             <button class="theme-toggle" id="theme-toggle">
                 <span id="theme-icon">🌙</span>
                 <span id="theme-text">Dark</span>
             </button>
+        </nav>
+
+        <header>
+            <div class="header-left">
+                <h1>🤖 Ollama Hub Dashboard</h1>
+                <p class="subtitle">Monitor all registered Ollama nodes in real-time</p>
+            </div>
         </header>
 
         <div class="stats" id="stats">

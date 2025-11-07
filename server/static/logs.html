@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Hub - Request Logs</title>
+    <style>
+        :root {
+            /* Light Theme */
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f1f5f9;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --text-tertiary: #94a3b8;
+            --accent-primary: #6366f1;
+            --accent-secondary: #8b5cf6;
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --accent-error: #ef4444;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-accent: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        }
+
+        [data-theme="dark"] {
+            /* Dark Theme */
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-tertiary: #94a3b8;
+            --accent-primary: #818cf8;
+            --accent-secondary: #a78bfa;
+            --accent-success: #34d399;
+            --accent-warning: #fbbf24;
+            --accent-error: #f87171;
+            --border-color: #334155;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-primary);
+            min-height: 100vh;
+            padding: 20px;
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Navigation */
+        .nav-bar {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 16px 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+
+        .nav-link:hover {
+            background: var(--bg-tertiary);
+            color: var(--accent-primary);
+        }
+
+        .nav-link.active {
+            background: var(--gradient-accent);
+            color: white;
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 28px 32px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .header-left h1 {
+            background: var(--gradient-accent);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .theme-toggle {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.2s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--accent-primary);
+            color: white;
+            border-color: var(--accent-primary);
+        }
+
+        /* Logs Section */
+        .logs-section {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border-color);
+        }
+
+        .logs-header {
+            margin-bottom: 20px;
+        }
+
+        .logs-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .logs-controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .logs-search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .logs-search-input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .logs-filter-select {
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .logs-clear-btn {
+            padding: 10px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .logs-clear-btn:hover {
+            background: var(--accent-primary);
+            color: white;
+            border-color: var(--accent-primary);
+        }
+
+        .logs-container {
+            max-height: calc(100vh - 300px);
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: var(--bg-primary);
+        }
+
+        .log-entry {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s;
+        }
+
+        .log-entry:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-entry.error {
+            border-left: 4px solid var(--accent-error);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .log-entry.success {
+            border-left: 4px solid var(--accent-success);
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .log-timestamp {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: 'Courier New', monospace;
+        }
+
+        .log-meta {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 12px;
+        }
+
+        .log-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .log-meta-label {
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .log-meta-value {
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .log-ip-badge {
+            background: var(--gradient-accent);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .log-ip-version-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .log-ip-version-badge.ipv4 {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .log-ip-version-badge.ipv6 {
+            background: #8b5cf6;
+            color: white;
+        }
+
+        .log-status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .log-status-badge.success {
+            background: var(--accent-success);
+            color: white;
+        }
+
+        .log-status-badge.error {
+            background: var(--accent-error);
+            color: white;
+        }
+
+        .log-details {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .log-detail-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .log-detail-label {
+            color: var(--text-secondary);
+            font-weight: 600;
+            min-width: 100px;
+        }
+
+        .log-detail-value {
+            color: var(--text-primary);
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        .log-json {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: var(--text-primary);
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .no-logs {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .refresh-indicator {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            background: var(--bg-secondary);
+            padding: 12px 20px;
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            border: 1px solid var(--border-color);
+            display: none;
+            z-index: 1000;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--bg-tertiary);
+            border-top: 2px solid var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .logs-controls {
+                flex-direction: column;
+            }
+            .logs-search-input {
+                width: 100%;
+            }
+            .nav-bar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation Bar -->
+        <nav class="nav-bar">
+            <div class="nav-links">
+                <a href="/" class="nav-link">📊 Dashboard</a>
+                <a href="/static/logs.html" class="nav-link active">📋 Logs</a>
+            </div>
+            <button class="theme-toggle" id="theme-toggle">
+                <span id="theme-icon">🌙</span>
+                <span id="theme-text">Dark</span>
+            </button>
+        </nav>
+
+        <header>
+            <div class="header-left">
+                <h1>📋 Request Logs</h1>
+                <p class="subtitle">Monitor all API requests, node dispatches, and errors</p>
+            </div>
+        </header>
+
+        <div class="logs-section">
+            <div class="logs-header">
+                <h2>Request Logs</h2>
+            </div>
+            <div class="logs-controls">
+                <input type="text" id="logs-search" placeholder="Search logs..." class="logs-search-input">
+                <select id="logs-filter" class="logs-filter-select">
+                    <option value="all">All Logs</option>
+                    <option value="success">Success Only</option>
+                    <option value="error">Errors Only</option>
+                </select>
+                <button class="logs-clear-btn" id="logs-clear">Clear Filter</button>
+            </div>
+            <div class="logs-container" id="logs-container">
+                <div class="no-logs">Loading logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="refresh-indicator" id="refresh-indicator">
+        <span class="spinner"></span>
+        <span>Refreshing...</span>
+    </div>
+
+    <script>
+        let currentTheme = localStorage.getItem('theme') || 'light';
+        let logsInterval;
+
+        // Theme Toggle
+        function initTheme() {
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            updateThemeButton();
+        }
+
+        function toggleTheme() {
+            currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            localStorage.setItem('theme', currentTheme);
+            updateThemeButton();
+        }
+
+        function updateThemeButton() {
+            const icon = document.getElementById('theme-icon');
+            const text = document.getElementById('theme-text');
+            if (currentTheme === 'dark') {
+                icon.textContent = '☀️';
+                text.textContent = 'Light';
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = 'Dark';
+            }
+        }
+
+        document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+        initTheme();
+
+        // Logs filtering and search
+        const logsSearch = document.getElementById('logs-search');
+        const logsFilter = document.getElementById('logs-filter');
+        const logsClear = document.getElementById('logs-clear');
+        let allLogs = [];
+
+        function filterLogs() {
+            const searchTerm = logsSearch.value.toLowerCase();
+            const filterType = logsFilter.value;
+            
+            let filtered = allLogs;
+            
+            // Apply type filter
+            if (filterType === 'success') {
+                filtered = filtered.filter(log => log.success);
+            } else if (filterType === 'error') {
+                filtered = filtered.filter(log => !log.success || log.error);
+            }
+            
+            // Apply search filter
+            if (searchTerm) {
+                filtered = filtered.filter(log => {
+                    const searchable = [
+                        log.request_ip,
+                        log.node_id,
+                        log.ip_version,
+                        log.endpoint,
+                        log.error,
+                        JSON.stringify(log.request_json || {})
+                    ].join(' ').toLowerCase();
+                    return searchable.includes(searchTerm);
+                });
+            }
+            
+            renderLogs(filtered);
+        }
+
+        logsSearch.addEventListener('input', filterLogs);
+        logsFilter.addEventListener('change', filterLogs);
+        logsClear.addEventListener('click', () => {
+            logsSearch.value = '';
+            logsFilter.value = 'all';
+            filterLogs();
+        });
+
+        function formatDuration(ms) {
+            if (!ms) return 'N/A';
+            if (ms < 1000) return `${Math.round(ms)}ms`;
+            return `${(ms / 1000).toFixed(2)}s`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function renderLogs(logs) {
+            const container = document.getElementById('logs-container');
+            
+            if (logs.length === 0) {
+                container.innerHTML = '<div class="no-logs">No logs found</div>';
+                return;
+            }
+
+            container.innerHTML = logs.map(log => {
+                const timestamp = new Date(log.timestamp);
+                const isError = !log.success || log.error;
+                const entryClass = isError ? 'error' : 'success';
+                
+                return `
+                    <div class="log-entry ${entryClass}">
+                        <div class="log-header">
+                            <div class="log-timestamp">${timestamp.toLocaleString()}</div>
+                            <div class="log-meta">
+                                <div class="log-meta-item">
+                                    <span class="log-meta-label">IP:</span>
+                                    <span class="log-ip-badge">${escapeHtml(log.request_ip)}</span>
+                                </div>
+                                ${log.ip_version ? `
+                                <div class="log-meta-item">
+                                    <span class="log-ip-version-badge ${log.ip_version.toLowerCase()}">${log.ip_version}</span>
+                                </div>
+                                ` : ''}
+                                ${log.node_id ? `
+                                <div class="log-meta-item">
+                                    <span class="log-meta-label">Node:</span>
+                                    <span class="log-meta-value">${escapeHtml(log.node_id)}</span>
+                                </div>
+                                ` : ''}
+                                <div class="log-meta-item">
+                                    <span class="log-status-badge ${log.success ? 'success' : 'error'}">
+                                        ${log.success ? '✓ Success' : '✗ Error'}
+                                    </span>
+                                </div>
+                                ${log.duration_ms ? `
+                                <div class="log-meta-item">
+                                    <span class="log-meta-label">Duration:</span>
+                                    <span class="log-meta-value">${formatDuration(log.duration_ms)}</span>
+                                </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                        <div class="log-details">
+                            <div class="log-detail-row">
+                                <span class="log-detail-label">Endpoint:</span>
+                                <span class="log-detail-value">${escapeHtml(log.method)} ${escapeHtml(log.endpoint)}</span>
+                            </div>
+                            ${log.node_url ? `
+                            <div class="log-detail-row">
+                                <span class="log-detail-label">Node URL:</span>
+                                <span class="log-detail-value">${escapeHtml(log.node_url)}</span>
+                            </div>
+                            ` : ''}
+                            ${log.status_code ? `
+                            <div class="log-detail-row">
+                                <span class="log-detail-label">Status:</span>
+                                <span class="log-detail-value">${log.status_code}</span>
+                            </div>
+                            ` : ''}
+                            ${log.request_json ? `
+                            <div class="log-detail-row">
+                                <span class="log-detail-label">Request JSON:</span>
+                            </div>
+                            <div class="log-json">${escapeHtml(JSON.stringify(log.request_json, null, 2))}</div>
+                            ` : ''}
+                            ${log.error ? `
+                            <div class="log-detail-row" style="margin-top: 8px;">
+                                <span class="log-detail-label" style="color: var(--accent-error);">Error:</span>
+                            </div>
+                            <div style="color: var(--accent-error); font-size: 12px; padding: 8px; background: rgba(239, 68, 68, 0.1); border-radius: 6px; margin-top: 4px;">
+                                ${escapeHtml(log.error)}
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function fetchLogs() {
+            try {
+                document.getElementById('refresh-indicator').style.display = 'block';
+                const response = await fetch('/logs?limit=200');
+                if (!response.ok) throw new Error('Failed to fetch logs');
+                allLogs = await response.json();
+                filterLogs();
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+                document.getElementById('logs-container').innerHTML = `
+                    <div class="no-logs">Error loading logs: ${escapeHtml(error.message)}</div>
+                `;
+            } finally {
+                document.getElementById('refresh-indicator').style.display = 'none';
+            }
+        }
+
+        // Auto-refresh logs every 3 seconds
+        function startLogsRefresh() {
+            logsInterval = setInterval(fetchLogs, 3000);
+        }
+
+        function stopLogsRefresh() {
+            if (logsInterval) {
+                clearInterval(logsInterval);
+            }
+        }
+
+        // Initial load
+        fetchLogs();
+        startLogsRefresh();
+
+        // Also refresh on window focus
+        window.addEventListener('focus', fetchLogs);
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', stopLogsRefresh);
+    </script>
+</body>
+</html>
+
