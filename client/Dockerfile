@@ -15,4 +15,4 @@ ENV NODE_PORT=8001
 
 EXPOSE 8001
 
-CMD [ "sh", "-c", "uvicorn agent:app --host 0.0.0.0 --port ${NODE_PORT:-8001}" ]
+CMD [ "sh", "-c", "uvicorn agent:app --host :: --port ${NODE_PORT:-8001}" ]

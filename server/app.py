@@ -260,13 +260,14 @@ def create_app() -> FastAPI:
             raise NodeDispatchError(node_id, "Node disappeared before dispatch", status_code=410)
 
         # Try multiple IP strategies for cross-network compatibility
-        # Strategy 1: Try IPv4 first (most common, better NAT support)
-        # Strategy 2: If IPv4 fails and IPv6 available, try IPv6
+        # Strategy 1: Try IPv6 first if available (for testing IPv6)
+        # Strategy 2: Fallback to IPv4 if IPv6 fails or not available
+        # Note: In production, you might want to prefer IPv4 first for better NAT support
         ip_strategies = []
-        if node_snapshot.ipv4:
-            ip_strategies.append(("IPv4", True))
         if node_snapshot.ipv6:
             ip_strategies.append(("IPv6", False))
+        if node_snapshot.ipv4:
+            ip_strategies.append(("IPv4", True))
         
         if not ip_strategies:
             raise NodeDispatchError(node_id, "Node has no reachable IP address", status_code=503)
