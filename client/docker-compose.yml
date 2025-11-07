@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      SERVER_URL: ${SERVER_URL:-http://localhost:8000}
+      SERVER_URL: ${SERVER_URL:-https://ollama.binarybuddies.in}
       OLLAMA_BASE_URL: http://127.0.0.1:11434
       NODE_ID: ${NODE_ID:-ollama-node-1}
       NODE_PORT: 8002

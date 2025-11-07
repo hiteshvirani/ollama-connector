@@ -72,7 +72,8 @@ TEMP_OUTPUT=$(mktemp)
 trap "rm -f $TEMP_OUTPUT" EXIT
 
 # Start cloudflared and capture output
-cloudflared tunnel --url "http://localhost:${NODE_PORT}" > "$TEMP_OUTPUT" 2>&1 &
+# Use 127.0.0.1 instead of localhost to ensure proper binding
+cloudflared tunnel --url "http://127.0.0.1:${NODE_PORT}" > "$TEMP_OUTPUT" 2>&1 &
 CLOUDFLARE_PID=$!
 
 # Wait for tunnel URL to be generated (max 30 seconds)
@@ -130,5 +131,5 @@ fi
 
 # Always export CLOUDFLARE_URL (even if empty) so Python can read it
 export CLOUDFLARE_URL
-exec uvicorn agent:app --host :: --port "$NODE_PORT"
+exec uvicorn agent:app --host 0.0.0.0 --port "$NODE_PORT"
 

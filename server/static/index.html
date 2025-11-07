@@ -957,6 +957,16 @@
                         </div>
                         
                         <div class="node-info">
+                            ${node.cloudflare_url ? `
+                            <div class="info-row">
+                                <span class="info-label">🌐 Cloudflare:</span>
+                                <span class="info-value" style="color: var(--accent-primary); font-weight: 600;">
+                                    <a href="${escapeHtml(node.cloudflare_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-primary); text-decoration: none;">
+                                        ${escapeHtml(node.cloudflare_url)}
+                                    </a>
+                                </span>
+                            </div>
+                            ` : ''}
                             <div class="info-row">
                                 <span class="info-label">IPv4:</span>
                                 <span class="info-value ip-address">${escapeHtml(ipv4)}</span>

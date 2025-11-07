@@ -81,10 +81,14 @@ class NodeState:
     failure_count: int = 0
 
     def bump_heartbeat(self, payload: HeartbeatPayload) -> None:
-        merged = payload.model_dump(exclude_none=False)
-        merged["last_seen"] = datetime.now(timezone.utc)
-        merged["status"] = "online"
-        self.record = self.record.copy(update=merged)
+        # Get all fields from payload, including cloudflare_url
+        payload_data = payload.model_dump(exclude_none=False)
+        # Create new NodeInfo with all fields to ensure cloudflare_url is included
+        self.record = NodeInfo(
+            **payload_data,
+            last_seen=datetime.now(timezone.utc),
+            status="online"
+        )
         self.failure_count = 0
 
     def to_dict(self) -> Dict[str, object]:
@@ -236,7 +240,11 @@ def create_app() -> FastAPI:
             entry = app.state.registry.get(node_id)
             if not entry:
                 return None
-            return entry.record.copy(deep=True)
+            snapshot = entry.record.copy(deep=True)
+            # Ensure cloudflare_url is preserved
+            if hasattr(entry.record, 'cloudflare_url'):
+                snapshot.cloudflare_url = entry.record.cloudflare_url
+            return snapshot
 
     async def dispatch_to_node(node_id: str, payload: JobDispatchPayload, log_entry: Optional[RequestLog] = None) -> Response:
         http = app.state.http
@@ -247,17 +255,29 @@ def create_app() -> FastAPI:
         if not node_snapshot:
             raise NodeDispatchError(node_id, "Node disappeared before dispatch", status_code=410)
 
+        # Log what we have in the snapshot
+        cf_url = getattr(node_snapshot, 'cloudflare_url', None)
+        LOGGER.info("Node snapshot for %s: cloudflare_url=%s (type: %s), ipv4=%s, ipv6=%s", 
+                   node_id, cf_url, type(cf_url).__name__, node_snapshot.ipv4, node_snapshot.ipv6)
+
         # Try connection strategies in priority order:
-        # 1. Cloudflare (most reliable for cross-network)
+        # 1. Cloudflare (most reliable for cross-network) - MUST BE FIRST
         # 2. IPv4 (common, good NAT support)
         # 3. IPv6 (fallback for IPv6-only networks)
         connection_strategies = []
-        if node_snapshot.cloudflare_url:
+        # Explicitly check for Cloudflare URL - must be non-empty string
+        if cf_url and isinstance(cf_url, str) and cf_url.strip():
             connection_strategies.append("cloudflare")
+            LOGGER.info("✅ Node %s has Cloudflare URL: %s - will try FIRST", node_id, cf_url)
+        else:
+            LOGGER.warning("❌ Node %s has NO valid Cloudflare URL (value: %s, type: %s) - will skip Cloudflare", 
+                         node_id, repr(cf_url), type(cf_url).__name__ if cf_url else 'None')
         if node_snapshot.ipv4:
             connection_strategies.append("ipv4")
         if node_snapshot.ipv6:
             connection_strategies.append("ipv6")
+        
+        LOGGER.info("Connection strategies for node %s (in order): %s", node_id, connection_strategies)
         
         if not connection_strategies:
             raise NodeDispatchError(node_id, "Node has no reachable address (no Cloudflare URL, IPv4, or IPv6)", status_code=503)
