@@ -1068,17 +1068,23 @@
             try {
                 document.getElementById('refresh-indicator').style.display = 'block';
                 const response = await fetch('/nodes');
-                if (!response.ok) throw new Error('Failed to fetch nodes');
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 const nodes = await response.json();
+                
+                console.log(`[Dashboard] Fetched ${nodes.length} node(s) from API`);
+                console.log('[Dashboard] Nodes:', nodes);
                 
                 updateStats(nodes);
                 renderNodes(nodes);
             } catch (error) {
-                console.error('Error fetching nodes:', error);
+                console.error('[Dashboard] Error fetching nodes:', error);
                 document.getElementById('nodes-grid').innerHTML = `
                     <div class="no-nodes">
                         <div class="no-nodes-icon">❌</div>
                         <div class="no-nodes-text">Error loading nodes: ${escapeHtml(error.message)}</div>
+                        <div style="margin-top: 10px; font-size: 12px; color: var(--text-secondary);">
+                            Check browser console (F12) for details
+                        </div>
                     </div>
                 `;
             } finally {

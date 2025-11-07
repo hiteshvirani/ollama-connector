@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from schemas import HeartbeatPayload, JobDispatchPayload, JobRequest, NodeInfo
 
@@ -109,6 +111,15 @@ class NodeDispatchError(RuntimeError):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Ollama Hub", version="0.1.0")
+
+    # Add CORS middleware to allow browser requests
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins for development
+        allow_credentials=True,
+        allow_methods=["*"],  # Allow all methods
+        allow_headers=["*"],  # Allow all headers
+    )
 
     app.state.registry: Dict[str, NodeState] = {}
     app.state.registry_lock = asyncio.Lock()
@@ -285,6 +296,7 @@ def create_app() -> FastAPI:
         # 3. IPv6 - Last priority
         if node_snapshot.ipv6:
             connection_strategies.append("ipv6")
+
             LOGGER.info("✅ [PRIORITY 3] Node %s will try IPv6: %s", node_id, node_snapshot.ipv6)
         
         LOGGER.info("🎯 [STRATEGY ORDER] Node %s connection strategies (FRESH for this request): %s", node_id, connection_strategies)
@@ -415,7 +427,7 @@ def create_app() -> FastAPI:
             entry = app.state.registry.get(node_id)
             if entry:
                 entry.bump_heartbeat(payload)
-                LOGGER.debug("Updated heartbeat for node %s (Cloudflare: %s, IPv4: %s, IPv6: %s)", 
+                LOGGER.info("✅ Updated heartbeat for node %s (Cloudflare: %s, IPv4: %s, IPv6: %s)", 
                            node_id, payload.cloudflare_url, payload.ipv4, payload.ipv6)
             else:
                 record = NodeInfo(**payload.model_dump(exclude_none=False), last_seen=datetime.now(timezone.utc), status="online")
@@ -426,9 +438,30 @@ def create_app() -> FastAPI:
         return {"node_id": node_id, "status": "ok"}
 
     @app.get("/nodes")
-    async def list_nodes() -> List[Dict[str, object]]:
+    async def list_nodes(request: Request) -> Response:
         snapshot = await registry_snapshot()
-        return [state.to_dict() for state in snapshot.values()]
+        nodes_list = [state.to_dict() for state in snapshot.values()]
+        LOGGER.info("📋 [GET /nodes] Returning %d node(s): %s", 
+                   len(nodes_list), [n.get("node_id") for n in nodes_list])
+        
+        # Add cache-busting headers to prevent browser caching
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+        
+        # Convert datetime objects to ISO strings for JSON serialization
+        def serialize_datetime(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+        
+        return Response(
+            content=json.dumps(nodes_list, default=serialize_datetime),
+            media_type="application/json",
+            headers=headers
+        )
 
     @app.get("/nodes/{node_id}")
     async def get_node(node_id: str) -> Dict[str, object]:
