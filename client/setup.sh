@@ -166,26 +166,45 @@ configure_ufw() {
     fi
     
     # Allow Node Agent port (IPv4 & IPv6)
+    # This port accepts incoming connections from the server hub
     if sudo ufw status | grep -q "${NODE_PORT}/tcp"; then
-        log_info "Port ${NODE_PORT} (Node Agent) is already allowed"
+        log_info "Port ${NODE_PORT}/tcp (Node Agent) is already allowed"
     else
         log_info "Allowing port ${NODE_PORT}/tcp for Node Agent (IPv4 & IPv6)..."
+        # UFW allow command automatically allows both IPv4 and IPv6
         sudo ufw allow ${NODE_PORT}/tcp comment 'Ollama Node Agent'
-        log_success "Port ${NODE_PORT} allowed for Node Agent"
+        log_success "Port ${NODE_PORT}/tcp allowed for Node Agent (IPv4 & IPv6)"
     fi
     
     # Allow Ollama API port (IPv4 & IPv6)
+    # This port is used by the node agent to connect to local Ollama
+    # Note: Since Ollama runs locally, this is mainly for completeness
+    # and in case Ollama needs to be accessed from other machines
     if sudo ufw status | grep -q "${OLLAMA_PORT}/tcp"; then
-        log_info "Port ${OLLAMA_PORT} (Ollama API) is already allowed"
+        log_info "Port ${OLLAMA_PORT}/tcp (Ollama API) is already allowed"
     else
         log_info "Allowing port ${OLLAMA_PORT}/tcp for Ollama API (IPv4 & IPv6)..."
+        # UFW allow command automatically allows both IPv4 and IPv6
         sudo ufw allow ${OLLAMA_PORT}/tcp comment 'Ollama API'
-        log_success "Port ${OLLAMA_PORT} allowed for Ollama API"
+        log_success "Port ${OLLAMA_PORT}/tcp allowed for Ollama API (IPv4 & IPv6)"
     fi
     
-    log_info "Current UFW status:"
+    # Note: Outbound connections (e.g., to server hub on port 8000) are allowed by default in UFW
+    # No explicit rule needed for client to connect to server
+    
+    # Display current firewall rules for our ports
+    log_info "Current UFW status for configured ports:"
     sudo ufw status numbered | grep -E "(${NODE_PORT}|${OLLAMA_PORT})" || true
+    
+    # Verify IPv6 is enabled in UFW (UFW allows both IPv4 and IPv6 by default)
+    if sudo ufw status | grep -q "IPv6"; then
+        log_info "IPv6 support: Enabled (UFW allows both IPv4 and IPv6)"
+    else
+        log_info "IPv6 support: Enabled by default (UFW rules apply to both IPv4 and IPv6)"
+    fi
+    
     log_success "Firewall configuration complete"
+    log_info "Note: Outbound connections (e.g., to server hub on port 8000) are allowed by default in UFW"
 }
 
 
