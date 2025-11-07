@@ -5,12 +5,15 @@ services:
     build: .
     image: ollama-hub:latest
     restart: unless-stopped
+    network_mode: host
     environment:
       - PORT=8000
       - LOG_LEVEL=INFO
       - HEARTBEAT_TTL_SECONDS=90
       - HEARTBEAT_OFFLINE_SECONDS=180
       - NODE_MAX_FAILURES=3
-    ports:
-      - "8000:8000"
+    # Note: Using network_mode: host
+    # - Server accessible on host's port 8000
+    # - Can directly reach client nodes on host network
+    # - Works for any network configuration (local or remote nodes)
 

@@ -110,9 +110,15 @@ def create_app() -> FastAPI:
             return dict(app.state.registry)
 
     def build_node_base(node: NodeInfo) -> str:
+        # Use the IP from the heartbeat (which is the reachable address from request.client.host)
+        # This works for any network configuration:
+        # - If client is on host network: request.client.host is Docker gateway (172.x.x.1)
+        # - If client is in Docker network: request.client.host is the container IP
+        # - If client is remote: request.client.host is the client's public IP
         host = node.ipv4 or node.ipv6
         if not host:
             raise ValueError("Node has no reachable IP address")
+        
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"http://{host}:{node.port}"
@@ -146,10 +152,22 @@ def create_app() -> FastAPI:
                 for node_id, entry in app.state.registry.items()
                 if model in entry.record.models and entry.record.status == "online"
             ]
+        
+        def get_cpu_load(item):
+            """Extract CPU load value, handling both dict and object cases."""
+            load = item[1].record.load
+            if not load:
+                return 1.0
+            # Handle both dict and LoadInfo object
+            if isinstance(load, dict):
+                return load.get("cpu", 1.0) if load.get("cpu") is not None else 1.0
+            else:
+                return load.cpu if load.cpu is not None else 1.0
+        
         candidates.sort(
             key=lambda item: (
                 item[1].active_jobs,
-                (item[1].record.load.cpu if item[1].record.load and item[1].record.load.cpu is not None else 1.0),
+                get_cpu_load(item),
                 item[1].failure_count,
             )
         )
@@ -214,26 +232,36 @@ def create_app() -> FastAPI:
 
     @app.post("/nodes/heartbeat")
     async def register_node(payload: HeartbeatPayload, request: Request) -> Dict[str, object]:
+        # Get the reachable address from the request
+        # When both server and client use host network, this is the actual client IP
+        # When client is remote, this is the client's public IP
         remote_host = request.client.host if request.client else None
 
         payload_data = payload.model_dump()
-        if not payload_data.get("ipv4") and remote_host and ":" not in remote_host:
-            payload_data["ipv4"] = remote_host
-        if not payload_data.get("ipv6") and remote_host and ":" in remote_host:
-            payload_data["ipv6"] = remote_host
+        node_id = payload.node_id
+
+        # Use the request's remote address as the reachable IP
+        # This works for any network configuration:
+        # - Both on host network: remote_host is client's actual IP
+        # - Client remote: remote_host is client's public IP
+        # - Client in Docker, server on host: remote_host is Docker gateway (but server can reach it)
+        if remote_host:
+            if ":" not in remote_host:
+                payload_data["ipv4"] = remote_host
+            else:
+                payload_data["ipv6"] = remote_host
 
         payload = HeartbeatPayload(**payload_data)
-        node_id = payload.node_id
 
         async with app.state.registry_lock:
             entry = app.state.registry.get(node_id)
             if entry:
                 entry.bump_heartbeat(payload)
-                LOGGER.debug("Updated heartbeat for node %s", node_id)
+                LOGGER.debug("Updated heartbeat for node %s from %s", node_id, remote_host)
             else:
                 record = NodeInfo(**payload.model_dump(), last_seen=datetime.now(timezone.utc), status="online")
                 app.state.registry[node_id] = NodeState(record=record)
-                LOGGER.info("Registered new node %s", node_id)
+                LOGGER.info("Registered new node %s from %s", node_id, remote_host)
 
         return {"node_id": node_id, "status": "ok"}
 

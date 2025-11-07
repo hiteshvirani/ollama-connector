@@ -11,5 +11,7 @@ services:
       OLLAMA_BASE_URL: http://127.0.0.1:11434
       NODE_ID: ${NODE_ID:-ollama-node-1}
       NODE_PORT: 8002
-    # Note: Using network_mode: host to access local Ollama at 127.0.0.1:11434
-    # Node will be accessible on host port 8002
+    # Note: Using network_mode: host
+    # - Ollama accessed at 127.0.0.1:11434 (local Ollama on host)
+    # - Node accessible on host's port 8001
+    # - Server must also use host network or be configured to reach host IPs
