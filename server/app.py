@@ -255,38 +255,49 @@ def create_app() -> FastAPI:
         if not node_snapshot:
             raise NodeDispatchError(node_id, "Node disappeared before dispatch", status_code=410)
 
-        # Log what we have in the snapshot
+        # CRITICAL: Build connection strategies FRESH for EVERY request
+        # Priority order MUST be: Cloudflare -> IPv4 -> IPv6
+        # This ensures Cloudflare is tried FIRST for every single request
+        
+        # Get Cloudflare URL from snapshot
         cf_url = getattr(node_snapshot, 'cloudflare_url', None)
-        LOGGER.info("Node snapshot for %s: cloudflare_url=%s (type: %s), ipv4=%s, ipv6=%s", 
-                   node_id, cf_url, type(cf_url).__name__, node_snapshot.ipv4, node_snapshot.ipv6)
+        
+        # Log what we have in the snapshot for debugging
+        LOGGER.info("🔍 [REQUEST START] Node %s snapshot: cloudflare_url=%s (type: %s), ipv4=%s, ipv6=%s", 
+                   node_id, cf_url, type(cf_url).__name__ if cf_url else 'None', node_snapshot.ipv4, node_snapshot.ipv6)
 
-        # Try connection strategies in priority order:
-        # 1. Cloudflare (most reliable for cross-network) - MUST BE FIRST
-        # 2. IPv4 (common, good NAT support)
-        # 3. IPv6 (fallback for IPv6-only networks)
+        # Build connection strategies list FRESH - Cloudflare ALWAYS first if available
         connection_strategies = []
-        # Explicitly check for Cloudflare URL - must be non-empty string
+        
+        # 1. CLOUDFLARE - MUST BE FIRST if available
         if cf_url and isinstance(cf_url, str) and cf_url.strip():
             connection_strategies.append("cloudflare")
-            LOGGER.info("✅ Node %s has Cloudflare URL: %s - will try FIRST", node_id, cf_url)
+            LOGGER.info("✅ [PRIORITY 1] Node %s will try CLOUDFLARE FIRST: %s", node_id, cf_url)
         else:
-            LOGGER.warning("❌ Node %s has NO valid Cloudflare URL (value: %s, type: %s) - will skip Cloudflare", 
+            LOGGER.warning("⚠️  Node %s has NO valid Cloudflare URL (value: %s, type: %s) - skipping Cloudflare", 
                          node_id, repr(cf_url), type(cf_url).__name__ if cf_url else 'None')
+        
+        # 2. IPv4 - Second priority
         if node_snapshot.ipv4:
             connection_strategies.append("ipv4")
+            LOGGER.info("✅ [PRIORITY 2] Node %s will try IPv4: %s", node_id, node_snapshot.ipv4)
+        
+        # 3. IPv6 - Last priority
         if node_snapshot.ipv6:
             connection_strategies.append("ipv6")
+            LOGGER.info("✅ [PRIORITY 3] Node %s will try IPv6: %s", node_id, node_snapshot.ipv6)
         
-        LOGGER.info("Connection strategies for node %s (in order): %s", node_id, connection_strategies)
+        LOGGER.info("🎯 [STRATEGY ORDER] Node %s connection strategies (FRESH for this request): %s", node_id, connection_strategies)
         
         if not connection_strategies:
             raise NodeDispatchError(node_id, "Node has no reachable address (no Cloudflare URL, IPv4, or IPv6)", status_code=503)
 
         last_error = None
-        for connection_type in connection_strategies:
+        for idx, connection_type in enumerate(connection_strategies, 1):
             try:
                 target_url = build_node_url(node_snapshot, connection_type)
-                LOGGER.info("Dispatching job %s to node %s via %s (%s)", payload.job_id, node_id, connection_type.upper(), target_url)
+                LOGGER.info("🚀 [ATTEMPT %d/%d] Dispatching job %s to node %s via %s (%s)", 
+                           idx, len(connection_strategies), payload.job_id, node_id, connection_type.upper(), target_url)
 
                 # Update log entry with node info
                 if log_entry:
@@ -304,7 +315,8 @@ def create_app() -> FastAPI:
                     if log_entry:
                         log_entry.error = str(exc)
                         log_entry.duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-                    LOGGER.debug("Failed to connect via %s (%s): %s", connection_type, target_url, exc)
+                    LOGGER.warning("❌ [ATTEMPT %d/%d] Failed to connect via %s (%s): %s - trying next strategy", 
+                                 idx, len(connection_strategies), connection_type, target_url, exc)
                     # Try next connection strategy
                     continue
 
@@ -322,10 +334,13 @@ def create_app() -> FastAPI:
                 if not success:
                     message = response.text or response.reason_phrase
                     last_error = Exception(f"HTTP {response.status_code}: {message}")
-                    LOGGER.debug("HTTP error via %s (%s): %s", connection_type, target_url, message)
+                    LOGGER.warning("❌ [ATTEMPT %d/%d] HTTP error via %s (%s): %s - trying next strategy", 
+                                 idx, len(connection_strategies), connection_type, target_url, message)
                     continue
 
                 # Success!
+                LOGGER.info("✅ [SUCCESS] Job %s completed via %s (%s) in %.2fms", 
+                           payload.job_id, connection_type.upper(), target_url, duration_ms)
                 media_type = response.headers.get("content-type", "application/json")
                 return Response(content=response.content, media_type=media_type, status_code=response.status_code)
             except Exception as exc:  # noqa: BLE001
