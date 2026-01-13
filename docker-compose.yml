@@ -1,0 +1,120 @@
+version: "3.8"
+
+# ===========================================
+# Ollama Connector - Production Docker Compose
+# All services on ports 7460-7470
+# ===========================================
+
+services:
+  # ===========================================
+  # PostgreSQL Database (Port 7461)
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ollama-connector-postgres
+    restart: unless-stopped
+    ports:
+      - "7461:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ollama_connector}
+      POSTGRES_USER: ${POSTGRES_USER:-ollama}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ollama_secret_2026}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - ollama-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ollama} -d ${POSTGRES_DB:-ollama_connector}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Redis Cache (Port 7462)
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: ollama-connector-redis
+    restart: unless-stopped
+    ports:
+      - "7462:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ollama-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+
+  # ===========================================
+  # FastAPI Backend (Port 7460)
+  # ===========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ollama-connector-backend
+    restart: unless-stopped
+    ports:
+      - "7460:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://ollama:ollama_secret_2026@postgres:5432/ollama_connector}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-admin-sk-default}
+      - NODE_SECRET=${NODE_SECRET:-node-secret-default}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_SITE_URL=${OPENROUTER_SITE_URL:-}
+      - OPENROUTER_SITE_NAME=${OPENROUTER_SITE_NAME:-Ollama Connector}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ollama-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================================
+  # Next.js Admin Panel (Port 7463)
+  # ===========================================
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: ollama-connector-admin
+    restart: unless-stopped
+    ports:
+      - "7463:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+    depends_on:
+      - backend
+    networks:
+      - ollama-net
+
+# ===========================================
+# Docker Network
+# ===========================================
+networks:
+  ollama-net:
+    driver: bridge
+    name: ollama-net
+
+# ===========================================
+# Persistent Volumes
+# ===========================================
+volumes:
+  postgres_data:
+    name: ollama-connector-postgres-data
+  redis_data:
+    name: ollama-connector-redis-data

@@ -1,9 +1,10 @@
-"""Client-side Ollama node agent implemented with FastAPI."""
+"""Client-side Ollama node agent with OpenAI-compatible proxy."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import socket
@@ -11,21 +12,21 @@ from typing import Any, Dict, Optional
 
 import httpx
 import psutil
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import Response
-
-from schemas import HeartbeatPayload, JobDispatchPayload, LoadInfo
+from pydantic import BaseModel, Field
 
 
 LOGGER = logging.getLogger("ollama_node")
 
 
-DEFAULT_SERVER_URL = "http://localhost:8000"
+# Configuration
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:7460")
 NODE_PORT = int(os.getenv("NODE_PORT", "8001"))
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-SERVER_URL = os.getenv("SERVER_URL", DEFAULT_SERVER_URL)
 NODE_ID = os.getenv("NODE_ID", socket.gethostname())
+NODE_SECRET = os.getenv("NODE_SECRET", "")
 CLOUDFLARE_URL = os.getenv("CLOUDFLARE_URL", None)
 
 
@@ -39,8 +40,28 @@ def configure_logging() -> None:
 configure_logging()
 
 
-app = FastAPI(title="Ollama Node Agent", version="0.1.0")
+app = FastAPI(title="Ollama Node Agent", version="2.0.0")
 
+
+# ===== Schemas =====
+
+class LoadInfo(BaseModel):
+    cpu: Optional[float] = None
+    memory: Optional[float] = None
+
+
+class HeartbeatPayload(BaseModel):
+    node_id: str
+    cloudflare_url: Optional[str] = None
+    ipv4: Optional[str] = None
+    ipv6: Optional[str] = None
+    port: int = NODE_PORT
+    models: list = []
+    load: Optional[LoadInfo] = None
+    metadata: dict = {}
+
+
+# ===== Helpers =====
 
 async def get_http_client() -> httpx.AsyncClient:
     client: Optional[httpx.AsyncClient] = getattr(app.state, "http", None)
@@ -72,76 +93,48 @@ def detect_ipv6() -> Optional[str]:
 def gather_load_info() -> LoadInfo:
     try:
         cpu = psutil.cpu_percent(interval=None) / 100.0
-    except Exception:  # noqa: BLE001
+    except Exception:
         cpu = None
     try:
         memory = psutil.virtual_memory().percent / 100.0
-    except Exception:  # noqa: BLE001
+    except Exception:
         memory = None
     return LoadInfo(cpu=cpu, memory=memory)
 
 
 async def fetch_available_models(http: httpx.AsyncClient) -> list[str]:
+    """Fetch models from Ollama."""
     url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags"
-    max_retries = 3
-    retry_delay = 2.0
-    
-    for attempt in range(max_retries):
-        try:
-            response = await http.get(url, timeout=5.0)
-            response.raise_for_status()
-            data = response.json()
-            
-            models = []
-            for item in data.get("models", []):
-                name = item.get("name")
-                if name:
-                    models.append(name)
-            
-            if models:
-                LOGGER.debug("Found %d models: %s", len(models), ", ".join(models))
-            else:
-                LOGGER.warning("Ollama returned no models. Make sure models are pulled.")
-            
-            return models
-        except httpx.TimeoutException:
-            if attempt < max_retries - 1:
-                LOGGER.debug("Ollama API timeout, retrying in %.1fs...", retry_delay)
-                await asyncio.sleep(retry_delay)
-                continue
-            LOGGER.warning("Failed to fetch models from Ollama: timeout after %d attempts", max_retries)
-            return []
-        except Exception as exc:  # noqa: BLE001
-            if attempt < max_retries - 1:
-                LOGGER.debug("Failed to fetch models (attempt %d/%d): %s, retrying...", attempt + 1, max_retries, exc)
-                await asyncio.sleep(retry_delay)
-                continue
-            LOGGER.warning("Failed to fetch models from Ollama after %d attempts: %s", max_retries, exc)
-            return []
-    
-    return []
+    try:
+        response = await http.get(url, timeout=5.0)
+        response.raise_for_status()
+        data = response.json()
+        models = [item.get("name") for item in data.get("models", []) if item.get("name")]
+        return models
+    except Exception as exc:
+        LOGGER.warning(f"Failed to fetch models: {exc}")
+        return []
 
 
-async def send_heartbeat() -> None:
-    http = await get_http_client()
-
-    models = await fetch_available_models(http)
-    load = gather_load_info()
-    
-    # Read CLOUDFLARE_URL dynamically - try environment variable first, then file, then module-level
+def get_cloudflare_url() -> Optional[str]:
+    """Read Cloudflare URL from env or file."""
     cloudflare_url = os.getenv("CLOUDFLARE_URL")
     if not cloudflare_url:
-        # Try reading from file as backup (set by start.sh)
         try:
             with open("/tmp/cloudflare_url.txt", "r") as f:
                 cloudflare_url = f.read().strip()
         except (FileNotFoundError, IOError):
             cloudflare_url = CLOUDFLARE_URL
-    
-    if cloudflare_url:
-        LOGGER.info("Including Cloudflare URL in heartbeat: %s", cloudflare_url)
-    else:
-        LOGGER.debug("No Cloudflare URL available")
+    return cloudflare_url
+
+
+# ===== Heartbeat =====
+
+async def send_heartbeat() -> None:
+    http = await get_http_client()
+    models = await fetch_available_models(http)
+    load = gather_load_info()
+    cloudflare_url = get_cloudflare_url()
 
     payload = HeartbeatPayload(
         node_id=NODE_ID,
@@ -154,34 +147,36 @@ async def send_heartbeat() -> None:
         metadata={"hostname": socket.gethostname()},
     )
 
-    url = f"{SERVER_URL.rstrip('/')}/nodes/heartbeat"
+    url = f"{SERVER_URL.rstrip('/')}/api/nodes/heartbeat"
+    headers = {"X-Node-Secret": NODE_SECRET}
+    
     try:
-        response = await http.post(url, json=payload.model_dump())
+        response = await http.post(url, json=payload.model_dump(), headers=headers)
         response.raise_for_status()
-        LOGGER.debug("Heartbeat acknowledged by server: %s", response.json())
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Heartbeat failed: %s", exc)
+        LOGGER.debug(f"Heartbeat sent: {len(models)} models")
+    except Exception as exc:
+        LOGGER.error(f"Heartbeat failed: {exc}")
 
 
 async def heartbeat_loop() -> None:
-    # Send an initial heartbeat immediately on startup.
     await send_heartbeat()
-
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL)
         await send_heartbeat()
 
 
+# ===== Lifecycle =====
+
 @app.on_event("startup")
-async def on_startup() -> None:  # pragma: no cover - lifecycle hook
-    LOGGER.info("Starting Ollama node agent %s", NODE_ID)
+async def on_startup() -> None:
+    LOGGER.info(f"Starting Ollama node agent {NODE_ID}")
     app.state.http = await get_http_client()
     app.state.heartbeat_task = asyncio.create_task(heartbeat_loop())
 
 
 @app.on_event("shutdown")
-async def on_shutdown() -> None:  # pragma: no cover - lifecycle hook
-    LOGGER.info("Stopping Ollama node agent %s", NODE_ID)
+async def on_shutdown() -> None:
+    LOGGER.info(f"Stopping Ollama node agent {NODE_ID}")
     heartbeat_task: Optional[asyncio.Task] = getattr(app.state, "heartbeat_task", None)
     if heartbeat_task:
         heartbeat_task.cancel()
@@ -192,31 +187,55 @@ async def on_shutdown() -> None:  # pragma: no cover - lifecycle hook
         await http.aclose()
 
 
-async def execute_with_ollama(job: JobDispatchPayload) -> httpx.Response:
+# ===== API Endpoints =====
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Dict[str, Any]) -> Response:
+    """
+    OpenAI-compatible chat completions endpoint.
+    Proxies to local Ollama.
+    """
     http = await get_http_client()
-    url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate"
-    payload: Dict[str, Any] = {"model": job.model, "prompt": job.prompt, "stream": job.stream}
-    if job.options:
-        payload.update({k: v for k, v in job.options.items() if k not in {"model", "prompt"}})
+    url = f"{OLLAMA_BASE_URL.rstrip('/')}/v1/chat/completions"
+    
     try:
-        response = await http.post(url, json=payload)
-        response.raise_for_status()
-        return response
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.exception("Ollama request failed for job %s", job.job_id)
-        raise HTTPException(status_code=502, detail=f"Ollama error: {exc}") from exc
+        response = await http.post(url, json=request)
+        return Response(
+            content=response.content,
+            media_type=response.headers.get("content-type", "application/json"),
+            status_code=response.status_code
+        )
+    except Exception as exc:
+        LOGGER.exception(f"Ollama request failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Ollama error: {exc}")
 
 
-@app.post("/execute")
-async def execute(job: JobDispatchPayload) -> Response:
-    LOGGER.info("Received job %s targeting model %s", job.job_id, job.model)
-    response = await execute_with_ollama(job)
-    media_type = response.headers.get("content-type", "application/json")
-    return Response(content=response.content, media_type=media_type, status_code=response.status_code)
+@app.get("/v1/models")
+async def list_models() -> Dict[str, Any]:
+    """List models from local Ollama."""
+    http = await get_http_client()
+    models = await fetch_available_models(http)
+    
+    import time
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "ollama"
+            }
+            for model in models
+        ]
+    }
 
 
 @app.get("/health")
-async def health() -> Dict[str, str]:  # pragma: no cover - trivial endpoint
+async def health() -> Dict[str, str]:
     return {"status": "ok", "node_id": NODE_ID}
 
 
+@app.get("/healthz")
+async def healthz() -> Dict[str, str]:
+    return {"status": "ok"}
